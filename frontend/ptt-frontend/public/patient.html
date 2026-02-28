@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Patient Room</title>
+  <style>
+    body {
+      background: #0f172a;
+      color: #f1f5f9;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      gap: 20px;
+    }
+    h2 { color: #f1f5f9; }
+    .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      font-size: 15px;
+      color: #94a3b8;
+    }
+    #log {
+      background: #1e293b;
+      padding: 16px;
+      border-radius: 10px;
+      width: 340px;
+      font-size: 13px;
+      color: #94a3b8;
+      min-height: 120px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    button {
+      padding: 10px 28px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    button:disabled { background: #334155; cursor: not-allowed; }
+
+    /* The important audio unlock banner */
+    #audioUnlockBanner {
+      background: #f59e0b;
+      color: #000;
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      border: none;
+      display: none;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>🛏️ Patient Room 1</h2>
+
+  <div class="status-row">
+    <span class="dot" id="connDot" style="background:#ef4444"></span>
+    <span id="connText">Disconnected</span>
+  </div>
+
+  <div class="status-row">
+    <span class="dot" id="audioDot" style="background:#64748b"></span>
+    <span id="audioText">No audio</span>
+  </div>
+
+  <!-- This button appears after connect to unlock audio playback -->
+  <button id="audioUnlockBanner" onclick="unlockAudio()">
+    👆 TAP HERE TO ENABLE AUDIO
+  </button>
+
+  <div id="log">Waiting to connect...</div>
+
+  <button id="connectBtn" onclick="connectPatient()">Connect as Patient</button>
+  <button id="disconnectBtn" onclick="disconnectPatient()" disabled>Disconnect</button>
+
+  <!-- Hidden audio element we reuse -->
+  <audio id="mainAudio" autoplay playsinline></audio>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@1.15.4/dist/livekit-client.umd.min.js"></script>
+
+  <script>
+    const BACKEND = "http://localhost:8000";
+    const ROOM_NAME = "room-1";
+    const PATIENT_NAME = "patient-room1";
+
+    let room = null;
+    let pendingTrack = null; // holds track until user clicks unlock
+
+    function log(msg) {
+      const box = document.getElementById("log");
+      const line = document.createElement("div");
+      line.textContent = new Date().toLocaleTimeString() + " — " + msg;
+      box.appendChild(line);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function setConnStatus(connected) {
+      document.getElementById("connDot").style.background = connected ? "#22c55e" : "#ef4444";
+      document.getElementById("connText").textContent = connected ? "Connected to " + ROOM_NAME : "Disconnected";
+      document.getElementById("connectBtn").disabled = connected;
+      document.getElementById("disconnectBtn").disabled = !connected;
+    }
+
+    function setAudioStatus(active) {
+      document.getElementById("audioDot").style.background = active ? "#f59e0b" : "#64748b";
+      document.getElementById("audioText").textContent = active ? "🔊 Receiving audio..." : "Audio ready";
+    }
+
+    // Called when user clicks the yellow banner
+    function unlockAudio() {
+      const banner = document.getElementById("audioUnlockBanner");
+      const audioEl = document.getElementById("mainAudio");
+
+      // Play silence first to unlock browser audio context
+      audioEl.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      audioEl.play().then(() => {
+        log("Audio unlocked ✅ You can now hear the technician");
+        banner.style.display = "none";
+
+        // If there was a pending track, attach it now
+        if (pendingTrack) {
+          attachTrack(pendingTrack);
+          pendingTrack = null;
+        }
+      }).catch(err => {
+        log("Audio unlock failed: " + err.message);
+      });
+    }
+
+    function attachTrack(track) {
+      const audioEl = document.getElementById("mainAudio");
+      track.attach(audioEl);
+      audioEl.volume = 1.0;
+      audioEl.play().catch(e => {
+        // If autoplay still blocked, show banner again
+        log("⚠️ Click the yellow button to hear audio");
+        pendingTrack = track;
+        document.getElementById("audioUnlockBanner").style.display = "block";
+      });
+
+      log("Audio attached ✅ Hold PTT on technician side to hear voice");
+      setAudioStatus(false); // will turn active when technician speaks
+
+      track.on("muted", () => {
+        log("Technician mic closed");
+        setAudioStatus(false);
+      });
+      track.on("unmuted", () => {
+        log("🎙️ Technician is speaking!");
+        setAudioStatus(true);
+      });
+    }
+
+    async function connectPatient() {
+      log("Fetching token from backend...");
+      try {
+        const res = await fetch(`${BACKEND}/api/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room_name: ROOM_NAME,
+            participant_name: PATIENT_NAME,
+            is_technician: false
+          })
+        });
+
+        const data = await res.json();
+        log("Token received ✅");
+
+        room = new LivekitClient.Room();
+
+        room.on(LivekitClient.RoomEvent.Connected, () => {
+          log("Connected to LiveKit room ✅");
+          setConnStatus(true);
+          // Show the unlock banner immediately after connect
+          document.getElementById("audioUnlockBanner").style.display = "block";
+          log("👆 Click the yellow button to enable audio!");
+        });
+
+        room.on(LivekitClient.RoomEvent.Disconnected, () => {
+          log("Disconnected from room");
+          setConnStatus(false);
+          setAudioStatus(false);
+          document.getElementById("audioUnlockBanner").style.display = "none";
+        });
+
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          if (track.kind === "audio") {
+            log("Audio track received from: " + participant.identity);
+            const banner = document.getElementById("audioUnlockBanner");
+
+            if (banner.style.display === "none") {
+              // Audio already unlocked, attach directly
+              attachTrack(track);
+            } else {
+              // Audio not unlocked yet, store track for after click
+              pendingTrack = track;
+              log("👆 Click the yellow button to hear audio!");
+            }
+          }
+        });
+
+        await room.connect(data.livekit_url, data.token);
+
+      } catch (err) {
+        log("Error: " + err.message);
+        console.error(err);
+      }
+    }
+
+    async function disconnectPatient() {
+      if (room) {
+        await room.disconnect();
+        room = null;
+        log("Manually disconnected");
+        setConnStatus(false);
+        setAudioStatus(false);
+        document.getElementById("audioUnlockBanner").style.display = "none";
+      }
+    }
+  </script>
+</body>
+</html>

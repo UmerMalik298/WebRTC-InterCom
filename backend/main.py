@@ -4,6 +4,11 @@ from routers import token, rooms
 
 app = FastAPI(title="PTT Intercom Backend")
 
+from fastapi.responses import HTMLResponse
+
+from fastapi.responses import HTMLResponse
+
+
 # Allow frontend to call your API
 app.add_middleware(
     CORSMiddleware,
