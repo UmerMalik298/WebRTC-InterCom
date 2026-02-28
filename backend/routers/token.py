@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from services.livekit import generate_token
+from backend.services.livekit import generate_token
 
 router = APIRouter()
 
