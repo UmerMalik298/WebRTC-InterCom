@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import token, rooms
+from backend.routers import token, rooms
 
 app = FastAPI(title="PTT Intercom Backend")
 
