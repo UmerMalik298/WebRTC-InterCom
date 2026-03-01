@@ -51,7 +51,6 @@
     }
     button:disabled { background: #334155; cursor: not-allowed; }
 
-    /* The important audio unlock banner */
     #audioUnlockBanner {
       background: #f59e0b;
       color: #000;
@@ -84,7 +83,6 @@
     <span id="audioText">No audio</span>
   </div>
 
-  <!-- This button appears after connect to unlock audio playback -->
   <button id="audioUnlockBanner" onclick="unlockAudio()">
     👆 TAP HERE TO ENABLE AUDIO
   </button>
@@ -94,19 +92,19 @@
   <button id="connectBtn" onclick="connectPatient()">Connect as Patient</button>
   <button id="disconnectBtn" onclick="disconnectPatient()" disabled>Disconnect</button>
 
-  <!-- Hidden audio element we reuse -->
-  <audio id="mainAudio" autoplay playsinline></audio>
+  <!-- audio element — NO autoplay attribute, we control it manually -->
+  <audio id="mainAudio" playsinline></audio>
 
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@1.15.4/dist/livekit-client.umd.min.js"></script>
 
   <script>
-    //const BACKEND = "http://localhost:8000";
     const BACKEND = "https://webrtc-intercom-production.up.railway.app";
     const ROOM_NAME = "room-1";
     const PATIENT_NAME = "patient-room1";
 
     let room = null;
-    let pendingTrack = null; // holds track until user clicks unlock
+    let audioUnlocked = false;
+    let pendingTrack = null;
 
     function log(msg) {
       const box = document.getElementById("log");
@@ -124,44 +122,54 @@
     }
 
     function setAudioStatus(active) {
-      document.getElementById("audioDot").style.background = active ? "#f59e0b" : "#64748b";
+      document.getElementById("audioDot").style.background = active ? "#22c55e" : "#64748b";
       document.getElementById("audioText").textContent = active ? "🔊 Receiving audio..." : "Audio ready";
     }
 
-    // Called when user clicks the yellow banner
-    function unlockAudio() {
+    async function unlockAudio() {
       const banner = document.getElementById("audioUnlockBanner");
       const audioEl = document.getElementById("mainAudio");
 
-      // Play silence first to unlock browser audio context
+      // Play a silent audio to unlock the audio context
       audioEl.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-      audioEl.play().then(() => {
-        log("Audio unlocked ✅ You can now hear the technician");
+      try {
+        await audioEl.play();
+        audioUnlocked = true;
         banner.style.display = "none";
+        log("✅ Audio unlocked!");
 
-        // If there was a pending track, attach it now
+        // If a track was waiting, attach it now
         if (pendingTrack) {
-          attachTrack(pendingTrack);
+          log("Attaching pending audio track...");
+          await attachTrack(pendingTrack);
           pendingTrack = null;
         }
-      }).catch(err => {
-        log("Audio unlock failed: " + err.message);
-      });
+      } catch (err) {
+        log("❌ Audio unlock failed: " + err.message);
+      }
     }
 
-    function attachTrack(track) {
+    async function attachTrack(track) {
       const audioEl = document.getElementById("mainAudio");
-      track.attach(audioEl);
+
+      // Detach any previous track
+      audioEl.srcObject = null;
+
+      // Use MediaStream directly — more reliable than track.attach()
+      const stream = new MediaStream([track.mediaStreamTrack]);
+      audioEl.srcObject = stream;
       audioEl.volume = 1.0;
-      audioEl.play().catch(e => {
-        // If autoplay still blocked, show banner again
-        log("⚠️ Click the yellow button to hear audio");
+
+      try {
+        await audioEl.play();
+        log("🔊 Audio playing! Hold PTT on technician side to hear voice.");
+        setAudioStatus(true);
+      } catch (err) {
+        log("⚠️ Play failed: " + err.message + " — tap the yellow button");
         pendingTrack = track;
         document.getElementById("audioUnlockBanner").style.display = "block";
-      });
-
-      log("Audio attached ✅ Hold PTT on technician side to hear voice");
-      setAudioStatus(false); // will turn active when technician speaks
+        return;
+      }
 
       track.on("muted", () => {
         log("Technician mic closed");
@@ -187,14 +195,16 @@
         });
 
         const data = await res.json();
-        log("Token received ✅");
+        log("✅ Token received");
 
-        room = new LivekitClient.Room();
+        room = new LivekitClient.Room({
+          adaptiveStream: true,
+        });
 
         room.on(LivekitClient.RoomEvent.Connected, () => {
-          log("Connected to LiveKit room ✅");
+          log("✅ Connected to LiveKit room");
           setConnStatus(true);
-          // Show the unlock banner immediately after connect
+          // Show unlock banner immediately
           document.getElementById("audioUnlockBanner").style.display = "block";
           log("👆 Click the yellow button to enable audio!");
         });
@@ -204,28 +214,34 @@
           setConnStatus(false);
           setAudioStatus(false);
           document.getElementById("audioUnlockBanner").style.display = "none";
+          audioUnlocked = false;
         });
 
-        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-          if (track.kind === "audio") {
-            log("Audio track received from: " + participant.identity);
-            const banner = document.getElementById("audioUnlockBanner");
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, async (track, pub, participant) => {
+          if (track.kind !== "audio") return;
+          log("🎵 Audio track received from: " + participant.identity);
 
-            if (banner.style.display === "none") {
-              // Audio already unlocked, attach directly
-              attachTrack(track);
-            } else {
-              // Audio not unlocked yet, store track for after click
-              pendingTrack = track;
-              log("👆 Click the yellow button to hear audio!");
-            }
+          if (audioUnlocked) {
+            await attachTrack(track);
+          } else {
+            pendingTrack = track;
+            log("👆 Click the yellow button to hear audio!");
+            document.getElementById("audioUnlockBanner").style.display = "block";
           }
         });
 
-        await room.connect(data.livekit_url, data.token);
+        room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+          if (track.kind === "audio") {
+            document.getElementById("mainAudio").srcObject = null;
+            setAudioStatus(false);
+            log("Audio track removed");
+          }
+        });
+
+        await room.connect(data.livekit_url, data.token, { autoSubscribe: true });
 
       } catch (err) {
-        log("Error: " + err.message);
+        log("❌ Error: " + err.message);
         console.error(err);
       }
     }
@@ -234,10 +250,13 @@
       if (room) {
         await room.disconnect();
         room = null;
+        document.getElementById("mainAudio").srcObject = null;
         log("Manually disconnected");
         setConnStatus(false);
         setAudioStatus(false);
         document.getElementById("audioUnlockBanner").style.display = "none";
+        audioUnlocked = false;
+        pendingTrack = null;
       }
     }
   </script>
