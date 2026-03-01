@@ -7,13 +7,7 @@ load_dotenv()
 def generate_token(room_name: str, participant_name: str, is_technician: bool = False) -> str:
     api_key = os.getenv("LIVEKIT_API_KEY")
     api_secret = os.getenv("LIVEKIT_API_SECRET")
-    print("=== DEBUG ===")
-    print(f"CWD: {os.getcwd()}")
-    print(f"API KEY: {api_key}")
-    print(f"API SECRET: {api_secret}")
-    print("=============")
-    if not api_key or not api_secret:
-        raise ValueError(f"Env vars not loaded! CWD is: {os.getcwd()}")
+  
     token = AccessToken(api_key, api_secret)
     
     grants = VideoGrants(
