@@ -4,7 +4,8 @@ import { Room, RoomEvent, createLocalAudioTrack } from "livekit-client";
 // const BACKEND_URL = "http://localhost:8000";
 //const BACKEND_URL = "http://192.168.1.5:8000";
 
-const BACKEND_URL = `http://${window.location.hostname}:8000`;
+//const BACKEND_URL = `http://${window.location.hostname}:8000`;
+const BACKEND_URL = "https://webrtc-intercom-production.up.railway.app";
 export default function PTTIntercom() {
   const [rooms, setRooms] = useState([]);           // rooms from backend
   const [selectedRoom, setSelectedRoom] = useState(null); // room technician clicked
