@@ -99,8 +99,14 @@
 
   <script>
     const BACKEND = "https://webrtc-intercom-production.up.railway.app";
-    const ROOM_NAME = "room-1";
-    const PATIENT_NAME = "patient-room1";
+    // const ROOM_NAME = "room-1";
+    // const PATIENT_NAME = "patient-room1";
+     // Get room name from URL: patient.html?room=room-1
+     const params = new URLSearchParams(window.location.search);
+     const ROOM_NAME = params.get("room") || "room-1";
+     const PATIENT_NAME = "patient-" + ROOM_NAME;
+     
+    document.querySelector("h2").textContent = "🛏️ Patient — " + ROOM_NAME;
 
     let room = null;
     let audioUnlocked = false;
