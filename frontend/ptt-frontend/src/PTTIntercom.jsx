@@ -87,6 +87,9 @@ export default function PTTIntercom() {
         setStatus("connected");
         setError(null);
       });
+      room.on(RoomEvent.LocalTrackPublished, (pub) => {
+        console.log("Track published:", pub.trackName, pub.kind);
+      });
 
       room.on(RoomEvent.Disconnected, () => {
         setStatus("disconnected");
@@ -106,6 +109,7 @@ export default function PTTIntercom() {
 
       audioTrackRef.current = audioTrack;
       await room.localParticipant.publishTrack(audioTrack);
+      await new Promise(resolve => setTimeout(resolve, 1000));
       await audioTrack.mute();
 
     } catch (err) {
