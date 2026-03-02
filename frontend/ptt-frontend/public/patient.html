@@ -142,7 +142,7 @@
         await audioEl.play();
         audioUnlocked = true;
         banner.style.display = "none";
-        log("✅ Audio unlocked!");
+        log("Audio unlocked!");
 
         // If a track was waiting, attach it now
         if (pendingTrack) {
@@ -151,7 +151,7 @@
           pendingTrack = null;
         }
       } catch (err) {
-        log("❌ Audio unlock failed: " + err.message);
+        log("Audio unlock failed: " + err.message);
       }
     }
 
@@ -171,7 +171,7 @@
         log("🔊 Audio playing! Hold PTT on technician side to hear voice.");
         setAudioStatus(true);
       } catch (err) {
-        log("⚠️ Play failed: " + err.message + " — tap the yellow button");
+        log("Play failed: " + err.message + " — tap the yellow button");
         pendingTrack = track;
         document.getElementById("audioUnlockBanner").style.display = "block";
         return;
@@ -182,7 +182,7 @@
         setAudioStatus(false);
       });
       track.on("unmuted", () => {
-        log("🎙️ Technician is speaking!");
+        log("Technician is speaking!");
         setAudioStatus(true);
       });
     }
@@ -201,18 +201,18 @@
         });
 
         const data = await res.json();
-        log("✅ Token received");
+        log("Token received");
 
         room = new LivekitClient.Room({
           adaptiveStream: true,
         });
 
         room.on(LivekitClient.RoomEvent.Connected, () => {
-          log("✅ Connected to LiveKit room");
+          log("Connected to LiveKit room");
           setConnStatus(true);
           // Show unlock banner immediately
           document.getElementById("audioUnlockBanner").style.display = "block";
-          log("👆 Click the yellow button to enable audio!");
+          log("Click the yellow button to enable audio!");
         });
 
         room.on(LivekitClient.RoomEvent.Disconnected, () => {
@@ -231,7 +231,7 @@
             await attachTrack(track);
           } else {
             pendingTrack = track;
-            log("👆 Click the yellow button to hear audio!");
+            log(" Click the yellow button to hear audio!");
             document.getElementById("audioUnlockBanner").style.display = "block";
           }
         });
@@ -247,7 +247,7 @@
         await room.connect(data.livekit_url, data.token, { autoSubscribe: true });
 
       } catch (err) {
-        log("❌ Error: " + err.message);
+        log("Error: " + err.message);
         console.error(err);
       }
     }
