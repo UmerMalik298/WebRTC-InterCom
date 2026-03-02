@@ -1,23 +1,22 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Room, RoomEvent, createLocalAudioTrack } from "livekit-client";
 
-// const BACKEND_URL = "http://localhost:8000";
-//const BACKEND_URL = "http://192.168.1.5:8000";
+const BACKEND_URL = "https://web-production-e7803.up.railway.app";
 
-//const BACKEND_URL = `http://${window.location.hostname}:8000`;
-const BACKEND_URL = "https://webrtc-intercom-production.up.railway.app";
 export default function PTTIntercom() {
-  const [rooms, setRooms] = useState([]);           // rooms from backend
-  const [selectedRoom, setSelectedRoom] = useState(null); // room technician clicked
+  const [rooms, setRooms] = useState([]);
+  const [selectedRoom, setSelectedRoom] = useState(null);
   const [status, setStatus] = useState("disconnected");
   const [isTalking, setIsTalking] = useState(false);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [isEmergency, setIsEmergency] = useState(false);
   const [error, setError] = useState(null);
 
   const roomRef = useRef(null);
   const audioTrackRef = useRef(null);
+  const broadcastRoomsRef = useRef([]); // holds all room connections during broadcast
   const isConnectingRef = useRef(false);
 
-  // ── On mount: fetch available rooms ──────────────────────────────
   useEffect(() => {
     fetchRooms();
   }, []);
@@ -32,9 +31,7 @@ export default function PTTIntercom() {
     }
   };
 
-  // ── When technician clicks a room ─────────────────────────────────
   const handleRoomSelect = async (room) => {
-    // If already connected to a room, disconnect first
     if (roomRef.current) {
       await roomRef.current.disconnect();
       roomRef.current = null;
@@ -42,20 +39,17 @@ export default function PTTIntercom() {
       setStatus("disconnected");
       setIsTalking(false);
     }
-
     setSelectedRoom(room);
     setError(null);
-    await connectToRoom(room.name);  // connect to the clicked room
+    await connectToRoom(room.name);
   };
 
-  // ── Connect to LiveKit room ───────────────────────────────────────
   const connectToRoom = async (roomName) => {
     if (isConnectingRef.current) return;
     isConnectingRef.current = true;
     setStatus("connecting");
 
     try {
-      // 1. Get token for this specific room
       const res = await fetch(`${BACKEND_URL}/api/token`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,7 +63,6 @@ export default function PTTIntercom() {
       if (!res.ok) throw new Error("Token request failed");
       const { token, livekit_url } = await res.json();
 
-      // 2. Create LiveKit Room
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
@@ -82,25 +75,24 @@ export default function PTTIntercom() {
 
       roomRef.current = room;
 
-      // 3. Events
-      room.on(RoomEvent.Connected, () => {
-        setStatus("connected");
-        setError(null);
-      });
-      room.on(RoomEvent.LocalTrackPublished, (pub) => {
-        console.log("Track published:", pub.trackName, pub.kind);
-      });
-
+      room.on(RoomEvent.Connected, () => { setStatus("connected"); setError(null); });
       room.on(RoomEvent.Disconnected, () => {
         setStatus("disconnected");
         setIsTalking(false);
         isConnectingRef.current = false;
       });
 
-      // 4. Connect
+      // Listen for broadcast / emergency data messages from backend
+      room.on(RoomEvent.DataReceived, (payload) => {
+        try {
+          const msg = JSON.parse(new TextDecoder().decode(payload));
+          if (msg.type === "broadcast") setIsBroadcasting(true);
+          if (msg.type === "emergency_override") setIsEmergency(true);
+        } catch {}
+      });
+
       await room.connect(livekit_url, token, { autoSubscribe: true });
 
-      // 5. Publish muted audio track
       const audioTrack = await createLocalAudioTrack({
         echoCancellation: true,
         noiseSuppression: true,
@@ -119,7 +111,7 @@ export default function PTTIntercom() {
     }
   };
 
-  // ── PTT ───────────────────────────────────────────────────────────
+  // ── PTT (single room) ─────────────────────────────────────────────
   const startTalking = async () => {
     if (!audioTrackRef.current || status !== "connected") return;
     await audioTrackRef.current.unmute();
@@ -132,13 +124,142 @@ export default function PTTIntercom() {
     setIsTalking(false);
   };
 
+  // ── Broadcast (connect to ALL rooms simultaneously) ───────────────
+  const startBroadcast = async () => {
+    if (isBroadcasting) return;
+    setIsBroadcasting(true);
+    setError(null);
+
+    try {
+      // Notify backend to send data message to all rooms
+      await fetch(`${BACKEND_URL}/api/rooms/broadcast`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      // Connect to every room and publish same audio track
+      const connections = [];
+      for (const room of rooms) {
+        const res = await fetch(`${BACKEND_URL}/api/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room_name: room.name,
+            participant_name: "technician-broadcast",
+            is_technician: true,
+          }),
+        });
+        const { token, livekit_url } = await res.json();
+
+        const lkRoom = new Room({ adaptiveStream: true, dynacast: true });
+        await lkRoom.connect(livekit_url, token, { autoSubscribe: false });
+
+        const audioTrack = await createLocalAudioTrack({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        });
+        await lkRoom.localParticipant.publishTrack(audioTrack);
+        // unmute immediately — broadcast is always live
+        await audioTrack.unmute();
+        connections.push({ room: lkRoom, track: audioTrack });
+      }
+
+      broadcastRoomsRef.current = connections;
+
+    } catch (err) {
+      setError("Broadcast failed: " + err.message);
+      setIsBroadcasting(false);
+    }
+  };
+
+  const stopBroadcast = async () => {
+    for (const { room, track } of broadcastRoomsRef.current) {
+      await track.mute();
+      await room.disconnect();
+    }
+    broadcastRoomsRef.current = [];
+    setIsBroadcasting(false);
+  };
+
+  // ── Emergency Override ────────────────────────────────────────────
+  const triggerEmergency = async () => {
+    if (isEmergency) {
+      // Cancel emergency
+      setIsEmergency(false);
+      await stopBroadcast();
+      return;
+    }
+
+    setIsEmergency(true);
+    setError(null);
+
+    try {
+      // Notify backend — mutes all patients, sends emergency signal
+      await fetch(`${BACKEND_URL}/api/rooms/emergency-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      // Also start broadcasting audio to all rooms
+      await startBroadcast();
+
+    } catch (err) {
+      setError("Emergency override failed: " + err.message);
+      setIsEmergency(false);
+    }
+  };
+
   const handlePress = (e) => { e.preventDefault(); startTalking(); };
   const handleRelease = (e) => { e.preventDefault(); stopTalking(); };
 
   // ── UI ────────────────────────────────────────────────────────────
   return (
     <div style={styles.container}>
+
+      {/* Emergency Banner */}
+      {isEmergency && (
+        <div style={styles.emergencyBanner}>
+          🚨 EMERGENCY OVERRIDE ACTIVE — All rooms notified
+          <button style={styles.cancelBtn} onClick={triggerEmergency}>Cancel</button>
+        </div>
+      )}
+
+      {/* Broadcast Banner */}
+      {isBroadcasting && !isEmergency && (
+        <div style={styles.broadcastBanner}>
+          📢 BROADCASTING TO ALL ROOMS
+          <button style={styles.cancelBtn} onClick={stopBroadcast}>Stop</button>
+        </div>
+      )}
+
       <h2 style={styles.title}>🏥 MRI Intercom — Technician Panel</h2>
+
+      {/* Global Controls — always visible */}
+      <div style={styles.globalControls}>
+        <button
+          style={{
+            ...styles.broadcastBtn,
+            backgroundColor: isBroadcasting ? "#d97706" : "#1d4ed8",
+            opacity: isEmergency ? 0.5 : 1,
+          }}
+          onClick={isBroadcasting ? stopBroadcast : startBroadcast}
+          disabled={isEmergency}
+        >
+          {isBroadcasting ? "⏹ Stop Broadcast" : "📢 Broadcast All"}
+        </button>
+
+        <button
+          style={{
+            ...styles.emergencyBtn,
+            backgroundColor: isEmergency ? "#7f1d1d" : "#dc2626",
+            animation: isEmergency ? "pulse 1s infinite" : "none",
+          }}
+          onClick={triggerEmergency}
+        >
+          {isEmergency ? "🚨 CANCEL EMERGENCY" : "🚨 Emergency Override"}
+        </button>
+      </div>
 
       {/* Room List */}
       {!selectedRoom ? (
@@ -159,9 +280,7 @@ export default function PTTIntercom() {
           <button style={styles.refreshBtn} onClick={fetchRooms}>🔄 Refresh</button>
         </div>
       ) : (
-        /* PTT Panel — shown after room selected */
         <div style={styles.pttPanel}>
-          {/* Back button */}
           <button style={styles.backBtn} onClick={() => {
             if (roomRef.current) roomRef.current.disconnect();
             setSelectedRoom(null);
@@ -171,9 +290,10 @@ export default function PTTIntercom() {
             ← Back to rooms
           </button>
 
-          <p style={styles.subtitle}>Room: <strong style={{color:"#f1f5f9"}}>{selectedRoom.label}</strong></p>
+          <p style={styles.subtitle}>
+            Room: <strong style={{ color: "#f1f5f9" }}>{selectedRoom.label}</strong>
+          </p>
 
-          {/* Connection Status */}
           <div style={styles.statusRow}>
             <div style={{
               ...styles.dot,
@@ -187,7 +307,6 @@ export default function PTTIntercom() {
             </span>
           </div>
 
-          {/* Error */}
           {error && (
             <div style={styles.errorBox}>
               ⚠️ {error}
@@ -202,6 +321,7 @@ export default function PTTIntercom() {
             style={{
               ...styles.pttButton,
               backgroundColor:
+                isEmergency ? "#7f1d1d" :
                 status !== "connected" ? "#334155" :
                 isTalking ? "#ef4444" : "#2563eb",
               transform: isTalking ? "scale(0.93)" : "scale(1)",
@@ -215,15 +335,19 @@ export default function PTTIntercom() {
             onMouseLeave={handleRelease}
             onTouchStart={handlePress}
             onTouchEnd={handleRelease}
-            disabled={status !== "connected"}
+            disabled={status !== "connected" || isEmergency || isBroadcasting}
           >
-            {status === "connecting" ? "⏳ Connecting..." :
+            {isEmergency ? "🚨 EMERGENCY" :
+             isBroadcasting ? "📢 BROADCASTING" :
+             status === "connecting" ? "⏳ Connecting..." :
              status === "disconnected" ? "❌ Offline" :
              isTalking ? "🔴 TALKING..." : "🎙️ HOLD TO TALK"}
           </button>
 
           <p style={styles.hint}>
-            {status !== "connected" ? "Waiting for connection..." :
+            {isEmergency ? "Emergency active — PTT disabled" :
+             isBroadcasting ? "Broadcasting to all rooms" :
+             status !== "connected" ? "Waiting for connection..." :
              isTalking ? "🔊 Patient can hear you now" :
              "Hold the button and speak"}
           </p>
@@ -242,6 +366,39 @@ const styles = {
   },
   title: { color: "#f1f5f9", fontSize: "20px", marginBottom: "6px" },
   subtitle: { color: "#94a3b8", fontSize: "15px", marginBottom: "8px" },
+  globalControls: {
+    display: "flex", gap: "12px", marginBottom: "8px", flexWrap: "wrap",
+    justifyContent: "center",
+  },
+  broadcastBtn: {
+    padding: "10px 20px", borderRadius: "8px",
+    border: "none", color: "white", fontWeight: "bold",
+    fontSize: "14px", cursor: "pointer",
+  },
+  emergencyBtn: {
+    padding: "10px 20px", borderRadius: "8px",
+    border: "none", color: "white", fontWeight: "bold",
+    fontSize: "14px", cursor: "pointer",
+  },
+  emergencyBanner: {
+    width: "100%", maxWidth: "500px",
+    backgroundColor: "#7f1d1d", color: "white",
+    padding: "12px 20px", borderRadius: "8px",
+    fontWeight: "bold", fontSize: "14px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+  },
+  broadcastBanner: {
+    width: "100%", maxWidth: "500px",
+    backgroundColor: "#1e40af", color: "white",
+    padding: "12px 20px", borderRadius: "8px",
+    fontWeight: "bold", fontSize: "14px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+  },
+  cancelBtn: {
+    backgroundColor: "rgba(255,255,255,0.2)", color: "white",
+    border: "none", borderRadius: "6px",
+    padding: "4px 12px", cursor: "pointer", fontSize: "12px",
+  },
   roomList: { display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" },
   roomButton: {
     width: "240px", padding: "14px 20px",
