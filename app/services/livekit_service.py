@@ -1,14 +1,9 @@
-import os
+# app/services/livekit_service.py
 from livekit.api import AccessToken, VideoGrants
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.core.config import settings  # ← clean import now
 
 def generate_token(room_name: str, participant_name: str, is_technician: bool = False) -> str:
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
-  
-    token = AccessToken(api_key, api_secret)
+    token = AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET)
     
     grants = VideoGrants(
         room_join=True,
@@ -19,5 +14,4 @@ def generate_token(room_name: str, participant_name: str, is_technician: bool = 
     )
     
     token.with_grants(grants).with_name(participant_name).with_identity(participant_name)
-    
     return token.to_jwt()

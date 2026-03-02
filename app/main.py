@@ -1,18 +1,13 @@
+# app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import token, rooms
+from app.api.v1.routes import rooms, token
 
 app = FastAPI(title="PTT Intercom Backend")
 
-from fastapi.responses import HTMLResponse
-
-from fastapi.responses import HTMLResponse
-
-
-# Allow frontend to call your API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
