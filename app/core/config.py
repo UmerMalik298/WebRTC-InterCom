@@ -4,6 +4,8 @@ class Settings(BaseSettings):
     LIVEKIT_URL: str
     LIVEKIT_API_KEY: str
     LIVEKIT_API_SECRET: str
+    SUPABASE_URL: str
+    SUPABASE_SERVICE_KEY: str
     
     class Config:
         env_file = ".env"

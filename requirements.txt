@@ -4,3 +4,5 @@ livekit
 livekit-api
 python-dotenv
 pydantic-settings
+storage3==0.7.0
+supabase==2.3.4
