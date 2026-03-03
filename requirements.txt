@@ -6,3 +6,4 @@ python-dotenv
 pydantic-settings
 httpx==0.27.2
 supabase==2.10.0
+# The above line is a comment to prevent the last line from being deleted in the future.
